@@ -1,219 +1,49 @@
+<!DOCTYPE html>
 <html>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/jquery/3.6.0/jquery.min.js" integrity="sha512-894YE6QWD5I59HgZOGReFYm4dnWc1Qt5NtvYSaNcOP+u1T9qYdvdihz0PPSiiqn/+/3e7Jo4EaG7TubfWGUrMQ==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
-<style>
-
-*, *::before, *::after {
-	box-sizing: inherit;
-}
-
-html {
-	font-size: 20px;
-	box-sizing: border-box;
-}
-
-body {
-	text-align: center;
-	color: #555;
-	background: radial-gradient(circle, #fff 15%, #ccc);
-	background-size: cover;
-	font-size: 1rem;
-	font-family: Roboto Slab, sans-serif;
-	margin-top: 1em;
-}
-
-h1 {
-	font-family: Fontdiner Swanky, sans-serif;
-	font-size: 2rem;
-	letter-spacing: 4px;
-	margin: 0;
-}
-
-.board {
-	margin: 30px auto;
-	display: flex;
-	flex-flow: row;
-	border: 1px solid #bbb;
-	box-shadow: 0 0 5px #bbb;
-	width: 930px;
-	height: 235px;
-	max-width: 100%;
-	resize: both;
-	overflow-x: auto;
-	background: #BA8c63 ;
-	border-radius: 20px;
-
-	&, p {
-		transform: rotate(0deg);
-		transition: transform 3s ease 0s;
-	}
-
-	[data-player="two"] &,
-	[data-player="two"] & p {
-		transform: rotate(180deg);
-	}
-}
-
-.rows {
-	flex: 7;
-	display: flex;
-	flex-direction: column;
-}
-
-.store {
-	flex: 1;
-	border-radius: 40px;
-}
-
-.row {
-	flex: 1;
-	display: flex;
-
-	&.player-two {
-		flex-direction: row-reverse;
-	}
-}
-
-.store, .pit {
-	margin: 10px;
-	display: flex;
-	justify-content: center;
-	align-items: center;
-	background-color: rgba(0,0,0,.15);
-	box-shadow: inset 0 0 2px rgba(0,0,0,.5);
-	cursor: default;
-
-	p {
-		cursor: inherit;
-	}
-
-	p::selection {
-		background: transparent;
-	}
-}
-
-.pit {
-	flex: 1;
-	border-radius: 40%;
-}
-
-[data-player="two"] .row.player-two .pit,
-[data-player="one"] .row.player-one .pit {
-	cursor: pointer;
-}
-
-[data-player="two"] .status,
-.store.player-two, .player-two .pit {
-	color: green;
-}
-
-[data-player="one"] .status,
-.store.player-one, .player-one .pit {
-	color: #0074D9;
-}
-
-button {
-	cursor: pointer;
-	padding: 7px 13px;
-	border: 1px solid #ccc;
-	border-radius: 3px;
-	color: #555;
-	background: #f7f7f7;
-	box-shadow: inset 0 1px 0 #fff, 0 1px 0 rgba( 0, 0, 0, 0.08 );
-
-	&:hover {
-		background: #fafafa;
-		color: #23282d;
-	}
-}
-
-
-</style>
+<head>
+	<meta charset="utf-8">
+	<title>Mancala</title>
+	<link rel="stylesheet" href="http://fonts.googleapis.com/css?family=Fontdiner+Swanky|Roboto+Slab">
+	<link rel="stylesheet" href="css/app.css">
+</head>
 <body data-player="one">
-<div class="board">
-  <div class="player-two store">
-     <p></p>
-  </div>
-  <div class="rows">
-    <div class="row player-two">
-				<div class="pit" data-pit="0"><p>4</p></div>
-				<div class="pit" data-pit="1"><p>4</p></div>
-				<div class="pit" data-pit="2"><p>4</p></div>
-				<div class="pit" data-pit="3"><p>4</p></div>
-				<div class="pit" data-pit="4"><p>4</p></div>
-				<div class="pit" data-pit="5"><p>4</p></div>
+	
+
+	<div class="board">
+		<div class="player-two store"><p></p></div>
+
+		<div class="rows">
+			<div class="row player-two">
+				<div class="pit"><p>4</p></div>
+				<div class="pit"><p>4</p></div>
+				<div class="pit"><p>4</p></div>
+				<div class="pit"><p>4</p></div>
+				<div class="pit"><p>4</p></div>
+				<div class="pit"><p>4</p></div>
 			</div>
-    <div class="row player-one">
-				<div class="pit" data-pit="0"><p>4</p></div>
-				<div class="pit" data-pit="1"><p>4</p></div>
-				<div class="pit" data-pit="2"><p>4</p></div>
-				<div class="pit" data-pit="3"><p>4</p></div>
-				<div class="pit" data-pit="4"><p>4</p></div>
-				<div class="pit" data-pit="5"><p>4</p></div>
+
+			<div class="row player-one">
+				<div class="pit"><p>4</p></div>
+				<div class="pit"><p>4</p></div>
+				<div class="pit"><p>4</p></div>
+				<div class="pit"><p>4</p></div>
+				<div class="pit"><p>4</p></div>
+				<div class="pit"><p>4</p></div>
 			</div>
-  </div>
-  <div class="player-one store">
-      <p></p>    
-  </div>
-  
-  
-</div>
-<p class="status">It is player <span class="current-player">one</span>'s turn</p>
-<button class="new-game" id="new-game">New Game</button>
+		</div>
+
+		<div class="player-one store"><p></p></div>
+	</div>
+
+	<p class="status">It is player <span class="current-player">one</span>'s turn</p>
+
+	<button class="new-game" id="new-game">Start Game</button>
+
+	
+	<script src="https://cdnjs.cloudflare.com/ajax/libs/jquery/3.6.0/jquery.min.js" integrity="sha512-894YE6QWD5I59HgZOGReFYm4dnWc1Qt5NtvYSaNcOP+u1T9qYdvdihz0PPSiiqn/+/3e7Jo4EaG7TubfWGUrMQ==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+	
+	<script src="js/app.js"></script>	
+
+	
 </body>
-<script>
-
-
-$(document).ready( function()
-{
-
- $("#new-game").click(function (event) {
-
-        //stop submit the form, we will post it manually.
-        event.preventDefault();
-
-        new_game();
-
-    });
-   
-   
-});
-function new_game() {
-
-    var search = {}
-    
-
-    $("#btn-search").prop("disabled", true);
-
-    $.ajax({
-        type: "POST",
-        contentType: "application/json",
-        url: "/games",
-        data: JSON.stringify(search),
-        dataType: 'json',
-        cache: false,
-        timeout: 600000,
-        success: function (data) {
-
-            var json = "<h4>Ajax Response</h4>&lt;pre&gt;"
-                + JSON.stringify(data, null, 4) + "&lt;/pre&gt;";
-            $('#feedback').html(json);
-
-            console.log("SUCCESS : ", data);
-            $("#btn-search").prop("disabled", false);
-
-        },
-        error: function (e) {
-
-            var json = "<h4>Ajax Response</h4>&lt;pre&gt;"
-                + e.responseText + "&lt;/pre&gt;";
-            $('#feedback').html(json);
-
-            console.log("ERROR : ", e);
-            $("#btn-search").prop("disabled", false);
-
-        }
-    });
-
-}
-</script>
 </html>
