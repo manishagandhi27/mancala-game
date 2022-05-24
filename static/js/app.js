@@ -1,10 +1,12 @@
 var game = (function () {
 	'use strict';
-
+   document.getElementById("turn").style.display = 'none';
+              document.getElementById("winnner").style.display = 'none';
+   
 	var gameid ="";
 	var init_pits = function (player, row, data, start,end) {	
 		for (var pit = 0; pit < row.length; pit++) {
-			row[pit].setAttribute('data-pit', pit);
+			//row[pit].setAttribute('data-pit', pit);
 			row[pit].onclick = function(e) {                
                 updatePits(e.target.getAttribute("data-pit"));
             };
@@ -42,7 +44,7 @@ var game = (function () {
             console.log("SUCCESS : ", data);
             init_pits('one', document.querySelectorAll('.row.player-one .pit'), data);
 	        init_pits('two', document.querySelectorAll('.row.player-two .pit'), data);
-	        
+	           document.getElementsByClassName("current-player")[0].textContent  = data.playerTurn;
 	        
 
         },
@@ -82,7 +84,8 @@ function updatePits(pitid) {
             console.log("SUCCESS : ", data);
             init_pits('one', document.querySelectorAll('.row.player-one .pit'), data);
 	        init_pits('two', document.querySelectorAll('.row.player-two .pit'), data);
-
+            document.getElementsByClassName("current-player")[0].textContent  = data.playerTurn;
+           document.getElementById("turn").style.display = 'block';
         },
         error: function (e) {
 

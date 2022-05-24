@@ -108,6 +108,29 @@ h1 {
 	color: #0074D9;
 }
 
+.arrow-right {
+	width: 0; 
+	height: 0; 
+	border-top: 40px solid transparent;
+	border-bottom: 40px solid transparent;
+	border-left: 40px solid #ccc;
+    float:right;
+    margin-top:-20px;
+    margin-right:-40px;
+}
+.container{width:5%; height:40px; background:#ccc; margin:100px auto;}
+
+.arrow-left {
+	width: 0; 
+	height: 0; 
+	border-top:40px solid transparent;
+	border-bottom: 40px solid transparent; 
+	float:left;
+	border-right:40px solid #ccc;
+    margin-top:-20px;
+    margin-left:-40px;
+}
+
 button {
 	cursor: pointer;
 	padding: 7px 13px;
