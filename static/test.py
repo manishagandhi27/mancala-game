@@ -111,3 +111,33 @@ if __name__ == "__main__":
     
     # Pretty print structured output
     print(json.dumps(structured_content, indent=2))
+
+
+def format_parsed_content(parsed_data):
+    """Formats parsed structured content into a readable text format for splitting."""
+    formatted_text = []
+    
+    current_heading = None
+    buffer = []
+    
+    for item in parsed_data:
+        if item["type"] == "heading":
+            # Store previous section before starting new heading
+            if buffer:
+                formatted_text.append("\n".join(buffer))
+                buffer = []
+            current_heading = item["content"]
+            buffer.append(f"## {current_heading}")  # Markdown-style heading
+            
+        elif item["type"] == "list_item":
+            buffer.append(f"- {item['content']}")  # Preserve list structure
+            
+        elif item["type"] == "paragraph":
+            buffer.append(item["content"])  # Keep paragraphs grouped
+            
+    # Append last buffered content
+    if buffer:
+        formatted_text.append("\n".join(buffer))
+    
+    return formatted_text
+
