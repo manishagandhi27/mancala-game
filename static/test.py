@@ -141,3 +141,84 @@ def format_parsed_content(parsed_data):
     
     return formatted_text
 
+
+
+
+import uuid
+from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain.schema import Document
+from sentence_transformers import SentenceTransformer
+
+class ChunkProcessor:
+    
+    def __init__(self, model_name="all-MiniLM-L6-v2"):
+        """Initialize the embedding model"""
+        self.embedding_model = SentenceTransformer(model_name)
+
+    def generate_chunks(self, documents, chunk_size=500, chunk_overlap=50):
+        """
+        Splits documents into chunks, generates embeddings, and returns structured chunk data.
+        
+        Args:
+        - documents: List of LangChain Document objects.
+        - chunk_size: Max characters per chunk.
+        - chunk_overlap: Overlap between chunks to maintain context.
+        
+        Returns:
+        - List of dictionaries containing file_id, chunk_id, chunk_text, and chunk_embedding.
+        """
+        text_splitter = RecursiveCharacterTextSplitter(
+            chunk_size=chunk_size,
+            chunk_overlap=chunk_overlap,
+            length_function=len
+        )
+        
+        chunked_data = []
+        
+        for doc in documents:
+            file_id = str(uuid.uuid4())  # Unique ID for each document
+            chunks = text_splitter.split_text(doc.page_content)
+            
+            for i, chunk_text in enumerate(chunks):
+                chunk_id = f"{file_id}-{i}"  # Unique chunk ID
+                chunk_embedding = self.embedding_model.encode(chunk_text).tolist()
+                
+                chunked_data.append({
+                    "file_id": file_id,
+                    "chunk_id": chunk_id,
+                    "chunk_text": chunk_text,
+                    "chunk_embedding": chunk_embedding,
+                    "metadata": doc.metadata  # Preserve metadata (e.g., source, page number)
+                })
+        
+        return chunked_data
+
+
+def process_and_chunk_document(file_path):
+    """
+    Processes a Word document, converts to LangChain Document format, and chunks it.
+    """
+    # Step 1: Process Word Document
+    parsed_content = DocumentProcessor.process_document(file_path)  # Extracts text, tables, images
+    
+    # Step 2: Convert to LangChain Document Format
+    langchain_docs = convert_to_langchain_documents(parsed_content, file_path)
+    
+    # Step 3: Chunk the document and generate embeddings
+    chunk_processor = ChunkProcessor()
+    chunked_docs = chunk_processor.generate_chunks(langchain_docs)
+    
+    return chunked_docs
+
+
+file_path = "sample.docx"
+chunked_output = process_and_chunk_document(file_path)
+
+# Print sample output
+for chunk in chunked_output[:3]:  # Display first 3 chunks
+    print(f"File ID: {chunk['file_id']}")
+    print(f"Chunk ID: {chunk['chunk_id']}")
+    print(f"Chunk Text: {chunk['chunk_text'][:200]}...")  # Show first 200 characters
+    print(f"Embedding (First 5 Values): {chunk['chunk_embedding'][:5]}")
+    print(f"Metadata: {chunk['metadata']}")
+    print("-" * 100)
