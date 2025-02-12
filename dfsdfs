@@ -1,0 +1,58 @@
+def merge_tables_with_footer_handling(tables):
+    """ Merge tables that are incorrectly split across pages due to footers or headers. """
+    merged_table = {
+        "data": {
+            "table_cells": []
+        }
+    }
+
+    last_row_offset = 0
+    for table in tables:
+        cells = table['data']['table_cells']
+        
+        # Check if the table contains footer/header patterns and skip them
+        cells = [cell for cell in cells if not is_footer_or_header(cell['text'])]
+
+        # Adjust row indices for merging
+        for cell in cells:
+            cell['start_row_offset_idx'] += last_row_offset
+            cell['end_row_offset_idx'] += last_row_offset
+            merged_table['data']['table_cells'].append(cell)
+        
+        # Update last row offset to ensure continuity
+        last_row_offset = max(cell['end_row_offset_idx'] for cell in cells) + 1
+
+    return merged_table
+
+
+def is_footer_or_header(text):
+    """ Check if a cell contains a footer or header pattern. Customize this function for your use case. """
+    footer_patterns = ["Page", "Continued", "Customer has"]  # Add common footer/header keywords
+    return any(pattern.lower() in text.lower() for pattern in footer_patterns)
+
+
+# Example usage with fragmented tables
+fragmented_tables = [
+    {
+        "data": {
+            "table_cells": [
+                {"start_row_offset_idx": 0, "start_col_offset_idx": 0, "text": "Customer has"},
+                {"start_row_offset_idx": 1, "start_col_offset_idx": 0, "text": "Order ID: 1234"}
+            ]
+        }
+    },
+    {
+        "data": {
+            "table_cells": [
+                {"start_row_offset_idx": 0, "start_col_offset_idx": 0, "text": "Order Date: 01/01/2023"},
+                {"start_row_offset_idx": 1, "start_col_offset_idx": 0, "text": "Total: $500"}
+            ]
+        }
+    }
+]
+
+# Merge tables across pages
+merged_table = merge_tables_with_footer_handling(fragmented_tables)
+
+import json
+print(json.dumps(merged_table, indent=2))
