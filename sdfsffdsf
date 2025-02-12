@@ -1,94 +1,86 @@
 def merge_multipage_tables(doc):
     """
-    Given a document dict (with keys: "body", "texts", "tables", "pictures"),
-    merge multipage tables according to the following rules:
-      1. Do not merge tables on the same page.
-      2. If two tables are on consecutive pages (e.g. page N and N+1) and
-         every element between their references in the "body" is either a
-         page header, page footer, or a picture, merge them.
-      3. The sequence of elements is taken from the "body" list.
+    Merge multipage tables from a document (dict) according to these rules:
+      1. Do not merge tables on the same page (use table["prov"]["page_no"]).
+      2. Merge tables from consecutive pages if the elements between their
+         occurrences (in the "body" order) are either page_header, page_footer, or a picture.
+      3. Use the order from the "body" list.
     """
-    # Build lookup dictionaries for texts, tables, and pictures.
+    # Build lookup dictionaries.
     texts_lookup = { text["self_ref"]: text for text in doc.get("texts", []) }
     tables_lookup = { table["self_ref"]: table for table in doc.get("tables", []) }
-    pictures_lookup = {}
-    if "pictures" in doc:
-        pictures_lookup = { pic["self_ref"]: pic for pic in doc.get("pictures", []) }
-    
-    # Extract the ordered list of $ref values from the "body".
+    pictures_lookup = { pic["self_ref"]: pic for pic in doc.get("pictures", []) } if "pictures" in doc else {}
+
+    # Get the ordered list of $ref values from "body"
     body_elements = doc.get("body", [])
     body_refs = [el["$ref"] for el in body_elements]
 
-    # Get the positions (index in body) of all table references.
+    # Build a list of positions for table references in the body.
     table_positions = []
     for idx, ref in enumerate(body_refs):
         if ref.startswith("#/tables/"):
             table_positions.append((idx, ref))
-    
-    merged_table_groups = []  # List of groups (each group is a list of table dicts)
+
+    merged_table_groups = []  # each group is a list of table dicts that will be merged together.
     i = 0
     while i < len(table_positions):
         start_index, table_ref = table_positions[i]
         current_table = tables_lookup.get(table_ref)
-        # Start a new group with the current table.
         current_group = [current_table]
         current_page_no = current_table["prov"]["page_no"]
-        pos = start_index  # current position in body
+        pos = start_index  # last position of a table in body that was merged
 
-        # Look ahead for next table refs that could be part of this multipage table.
+        # Look ahead for tables that might be continuations.
         j = i + 1
         while j < len(table_positions):
             next_index, next_table_ref = table_positions[j]
             next_table = tables_lookup.get(next_table_ref)
             next_page_no = next_table["prov"]["page_no"]
 
-            # Rule 1: do not merge if both tables are on the same page.
+            # Rule 1: Do not merge if tables are on the same page.
             if next_page_no == current_page_no:
                 break
 
-            # Check for consecutive pages.
+            # Only consider consecutive page numbers.
             if next_page_no == current_page_no + 1:
-                # Check the elements between the current table and the next table.
                 allowed = True
+                # Check intervening elements between last table and next table.
                 for k in range(pos + 1, next_index):
                     in_between_ref = body_refs[k]
-                    if in_between_ref.startswith("#/texts/"):
-                        # Look up text element and check its label.
-                        text_obj = texts_lookup.get(in_between_ref, {})
-                        # Only allowed if the label is page_header or page_footer.
+                    # Adjust the check to catch both "#/texts/" and "#/text/"
+                    if in_between_ref.startswith("#/texts/") or in_between_ref.startswith("#/text/"):
+                        # Lookup text element; if label isn't header/footer, disallow merge.
+                        text_obj = texts_lookup.get(in_between_ref.replace("#/text/", "#/texts/"), {})
                         if text_obj.get("label") not in ["page_header", "page_footer"]:
                             allowed = False
                             break
                     elif in_between_ref.startswith("#/tables/"):
-                        # Should not occur (we already picked out tables) but if it does, not allowed.
+                        # If another table appears, that's unexpected here.
                         allowed = False
                         break
                     elif in_between_ref.startswith("#/picture/"):
                         # Pictures are allowed.
                         continue
                     else:
-                        # If unknown type, we disallow merging.
+                        # Unknown element; disallow.
                         allowed = False
                         break
 
                 if allowed:
-                    # Merge this table: add to the current group.
+                    # Merge this table by adding it to the group.
                     current_group.append(next_table)
-                    # Update the "pos" and "current_page_no" for further merging.
                     pos = next_index
                     current_page_no = next_page_no
-                    j += 1  # move to check further tables
+                    j += 1  # Move to the next candidate.
                 else:
-                    # There is intervening content that prevents merging.
                     break
             else:
-                # Page numbers are not consecutive.
+                # Not consecutive pages.
                 break
         merged_table_groups.append(current_group)
-        i = j  # Continue from the next unchecked table reference
+        i = j  # Continue from the next unchecked table
 
-    # Now, create a new list of tables: if a group contains multiple tables, merge them;
-    # otherwise, include the table as is.
+    # Build new table list: if a group has multiple tables, merge them.
     new_tables = []
     for group in merged_table_groups:
         if len(group) == 1:
@@ -97,30 +89,26 @@ def merge_multipage_tables(doc):
             merged_table = merge_tables_in_group(group)
             new_tables.append(merged_table)
     
-    # Optionally, update the document's tables with the merged ones.
+    # Update document.
     doc["tables"] = new_tables
     return doc
 
 
 def merge_tables_in_group(group):
     """
-    Merge a list of table dictionaries (from multipage tables) into one table.
-    In this example, we simply concatenate their "table_cells" lists.
-    (Additional logic could be added to remove duplicate headers, etc.)
+    Merge a list of table dictionaries by concatenating their table_cells.
+    (Additional logic—such as handling duplicate headers—can be added as needed.)
     """
     merged_cells = []
     for table in group:
         cells = table.get("data", {}).get("table_cells", [])
         merged_cells.extend(cells)
     
-    # Create a merged table dictionary.
     merged_table = {
-        "data": {
-            "table_cells": merged_cells
-        },
-        # For provenance, we take the first table's page info.
+        "data": {"table_cells": merged_cells},
+        # Retain provenance from the first table.
         "prov": group[0]["prov"],
-        # Create a new self_ref for the merged table.
+        # Create a new self_ref to indicate it is merged.
         "self_ref": group[0]["self_ref"] + "_merged"
     }
     return merged_table
@@ -128,32 +116,25 @@ def merge_tables_in_group(group):
 
 # ===== Example Usage =====
 if __name__ == "__main__":
-    # Sample JSON document (using the provided example)
+    # Example document simulating the problematic scenario:
+    # Page 1: table 1, Page 2: table 2, then some non-header text, then table 3.
     doc = {
         "body": [
             {"$ref": "#/tables/0"},
-            {"$ref": "#/texts/45"},
-            {"$ref": "#/texts/46"},
-            {"$ref": "#/picture/5"},
             {"$ref": "#/tables/1"},
-            {"$ref": "#/texts/47"},
+            {"$ref": "#/texts/99"},   # Some text that's not a header/footer.
             {"$ref": "#/tables/2"}
         ],
         "texts": [
             {
-                "self_ref": "#/texts/45",
+                "self_ref": "#/texts/99",
                 "parent": {"$ref": "#/body"},
                 "children": [],
-                "label": "page_header",
-                "prov": [{
-                    "page_no": 1,
-                    "bbox": {"l": 18.34, "t": 627.0, "r": 36.34, "b": 237.0, "coord_origin": "BOTTOMLEFT"},
-                    "charspan": [0, 39]
-                }],
-                "orig": "arXiv:2408.09869v5  [cs.CL]  9 Dec 2024",
-                "text": "arXiv:2408.09869v5  [cs.CL]  9 Dec 2024"
-            },
-            # You could add more texts here (e.g., texts/46 and texts/47) if needed.
+                "label": "body_text",  # Not allowed for merging.
+                "prov": [{"page_no": 2}],
+                "orig": "Some paragraph text",
+                "text": "This is a normal paragraph."
+            }
         ],
         "tables": [
             {
@@ -191,12 +172,11 @@ if __name__ == "__main__":
                 "self_ref": "#/tables/2"
             }
         ],
-        # Optionally include a "pictures" list if needed.
         "pictures": [
             {
                 "self_ref": "#/picture/5",
                 "label": "picture",
-                # other picture properties...
+                # additional picture properties...
             }
         ]
     }
