@@ -1,68 +1,47 @@
-def merge_tables_with_header_fix(tables):
+def merge_word_tables(tables):
     """
-    Merge tables across multiple pages, detecting and fixing wrong headers in continuation tables.
+    Merge tables in Word documents based on structural continuity and avoid false merges.
+    Since no page numbers are available, rely on headers and column count.
     """
     merged_tables = []
     current_table = {
         "data": {
             "table_cells": []
-        },
-        "start_page": None,
-        "end_page": None
+        }
     }
     reference_header = None
     last_row_offset = 0
-    current_page = None
+    last_column_count = None
 
     for table in tables:
         cells = table['data']['table_cells']
-        current_page = table['prov']['page_no']  # Extract page number from table['prov']
         current_column_count = max(cell['start_col_offset_idx'] for cell in cells) + 1
         has_column_header = any(cell.get('column_header', False) for cell in cells)
         current_header = extract_header(cells) if has_column_header else None
 
         if reference_header is None:
-            # First table, initialize the merging context
+            # First table, initialize merging context
             reference_header = current_header
+            last_column_count = current_column_count
             current_table['data']['table_cells'].extend(cells)
-            current_table['start_page'] = current_page
-            current_table['end_page'] = current_page
             last_row_offset = max(cell['end_row_offset_idx'] for cell in cells) + 1
-        elif current_page == current_table['end_page'] + 1:
-            # Consecutive page: Candidate for merging
-            if is_footer(cells):
-                continue  # Skip footer rows
-            elif is_wrong_header(current_header, reference_header):
-                # Wrong header detected in continuation—treat as regular data
-                for cell in cells:
-                    cell['start_row_offset_idx'] += last_row_offset
-                    cell['end_row_offset_idx'] += last_row_offset
-                    current_table['data']['table_cells'].append(cell)
-                last_row_offset = max(cell['end_row_offset_idx'] for cell in cells) + 1
-                current_table['end_page'] = current_page
-            else:
-                # Different table structure—start a new table
-                merged_tables.append(current_table)
-                current_table = {
-                    "data": {
-                        "table_cells": cells
-                    },
-                    "start_page": current_page,
-                    "end_page": current_page
-                }
-                reference_header = current_header
-                last_row_offset = max(cell['end_row_offset_idx'] for cell in cells) + 1
+        elif current_column_count == last_column_count and is_continuation(current_header, reference_header):
+            # Continuation: Merge the table
+            for cell in cells:
+                cell['start_row_offset_idx'] += last_row_offset
+                cell['end_row_offset_idx'] += last_row_offset
+                current_table['data']['table_cells'].append(cell)
+            last_row_offset = max(cell['end_row_offset_idx'] for cell in cells) + 1
         else:
-            # Non-consecutive page: Treat as a new table
+            # New table: Append the current table and start a new one
             merged_tables.append(current_table)
             current_table = {
                 "data": {
                     "table_cells": cells
-                },
-                "start_page": current_page,
-                "end_page": current_page
+                }
             }
             reference_header = current_header
+            last_column_count = current_column_count
             last_row_offset = max(cell['end_row_offset_idx'] for cell in cells) + 1
 
     # Add the last merged table
@@ -75,25 +54,24 @@ def extract_header(cells):
     return [cell['text'].strip() for cell in cells if cell['start_row_offset_idx'] == 0]
 
 
-def is_wrong_header(current_header, reference_header):
+def is_continuation(current_header, reference_header):
     """
-    Detect if the current header is a wrong header by comparing it with the reference header.
-    If it has fewer columns or doesn't match the reference, it is likely wrong.
+    Determine if the current table is a continuation of the previous one.
+    Use column count and header similarity as primary checks.
     """
-    if not current_header or not reference_header:
+    if current_header is None:
+        return True  # No header indicates a likely continuation
+    return headers_are_similar(current_header, reference_header)
+
+
+def headers_are_similar(header1, header2):
+    """ Compare two headers to determine if they are similar. """
+    if not header1 or not header2:
         return False
-    if len(current_header) < len(reference_header):
-        return True  # Likely a wrong header
-    return False
+    return header1 == header2 or set(header1).issubset(set(header2))
 
 
-def is_footer(cells):
-    """ Detect footer rows based on common patterns (e.g., 'Page', 'Total', 'Continued'). """
-    footer_patterns = ["Page", "Total", "Continued", "End of"]
-    return any(any(pattern.lower() in cell['text'].lower() for pattern in footer_patterns) for cell in cells)
-
-
-# Example usage with multiple tables and incorrect headers in continuation tables
+# Example usage with tables from Word documents
 fragmented_tables = [
     {
         "data": {
@@ -103,17 +81,15 @@ fragmented_tables = [
                 {"start_row_offset_idx": 1, "start_col_offset_idx": 0, "text": "John Doe"},
                 {"start_row_offset_idx": 1, "start_col_offset_idx": 1, "text": "1234"}
             ]
-        },
-        "prov": {"page_no": 1}
+        }
     },
     {
         "data": {
             "table_cells": [
-                {"start_row_offset_idx": 0, "start_col_offset_idx": 0, "text": "Jane Smith"},  # Wrong header treated as regular row
+                {"start_row_offset_idx": 0, "start_col_offset_idx": 0, "text": "Jane Smith"},
                 {"start_row_offset_idx": 0, "start_col_offset_idx": 1, "text": "5678"}
             ]
-        },
-        "prov": {"page_no": 2}
+        }
     },
     {
         "data": {
@@ -123,13 +99,12 @@ fragmented_tables = [
                 {"start_row_offset_idx": 1, "start_col_offset_idx": 0, "text": "Laptop"},
                 {"start_row_offset_idx": 1, "start_col_offset_idx": 1, "text": "$1000"}
             ]
-        },
-        "prov": {"page_no": 3}
+        }
     }
 ]
 
-# Merge tables with header correction
-merged_tables = merge_tables_with_header_fix(fragmented_tables)
+# Merge tables based on structural continuity
+merged_tables = merge_word_tables(fragmented_tables)
 
 import json
 print(json.dumps(merged_tables, indent=2))
