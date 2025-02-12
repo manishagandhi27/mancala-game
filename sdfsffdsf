@@ -1,57 +1,41 @@
-def merge_tables_accurately(tables, is_pdf=True):
+def merge_pdf_tables(tables, body):
     """
-    Merge multi-page tables for both PDFs and Word documents without skipping valid continuation tables.
-    Avoid merging unrelated tables and ensure all continuation tables are included.
+    Merge multi-page tables for PDFs by analyzing the body sequence to determine if two tables are continuations.
+    Avoid merging tables on the same page and merge only if the body sequence indicates a continuation.
     """
     merged_tables = []
     current_table = None
-    reference_header = None
     last_row_offset = 0
-    last_column_count = None
-    last_page = None
+    reference_header = None
 
-    for table in tables:
+    for i, table in enumerate(tables):
         cells = table['data']['table_cells']
-        current_page = table['prov'].get('page_no') if is_pdf else None  # Use page number if available (for PDFs)
+        current_page = table['prov']['page_no']
+        table_ref = table['self_ref']
         current_column_count = max(cell['start_col_offset_idx'] for cell in cells) + 1
         has_column_header = any(cell.get('column_header', False) for cell in cells)
         current_header = extract_header(cells) if has_column_header else None
 
         if current_table is None:
-            # First table, initialize the merging context
+            # First table, initialize merging context
             current_table = create_new_table(table, cells)
             reference_header = current_header
             last_row_offset = max(cell['end_row_offset_idx'] for cell in cells) + 1
-            last_column_count = current_column_count
-            last_page = current_page
         else:
-            # Merge logic based on document type
-            if (is_pdf and current_page == last_page + 1) or (not is_pdf and current_column_count == last_column_count):
-                # Multi-page continuation based on structure
-                if is_wrong_header(current_header, reference_header):
-                    # Continuation detected—merge without skipping
-                    for cell in cells:
-                        cell['start_row_offset_idx'] += last_row_offset
-                        cell['end_row_offset_idx'] += last_row_offset
-                        current_table['data']['table_cells'].append(cell)
-                    last_row_offset = max(cell['end_row_offset_idx'] for cell in cells) + 1
-                    last_page = current_page
-                else:
-                    # Different table structure—append current table and start a new one
-                    merged_tables.append(current_table)
-                    current_table = create_new_table(table, cells)
-                    reference_header = current_header
-                    last_row_offset = max(cell['end_row_offset_idx'] for cell in cells) + 1
-                    last_column_count = current_column_count
-                    last_page = current_page
+            next_table_ref = tables[i]['self_ref'] if i < len(tables) - 1 else None
+            if next_table_ref and is_continuation(table_ref, next_table_ref, body):
+                # Continuation table logic
+                for cell in cells:
+                    cell['start_row_offset_idx'] += last_row_offset
+                    cell['end_row_offset_idx'] += last_row_offset
+                    current_table['data']['table_cells'].append(cell)
+                last_row_offset = max(cell['end_row_offset_idx'] for cell in cells) + 1
             else:
-                # New table detected—append current table and reset merging context
+                # New table detected, save the current one and start a new one
                 merged_tables.append(current_table)
                 current_table = create_new_table(table, cells)
                 reference_header = current_header
                 last_row_offset = max(cell['end_row_offset_idx'] for cell in cells) + 1
-                last_column_count = current_column_count
-                last_page = current_page
 
     # Add the last merged table
     if current_table:
@@ -59,14 +43,35 @@ def merge_tables_accurately(tables, is_pdf=True):
     return merged_tables
 
 
-def create_new_table(table, cells):
-    """ Create a new table with the given cells and metadata. """
-    return {
-        "data": {
-            "table_cells": cells
-        },
-        "prov": table.get("prov", {})
-    }
+def is_continuation(current_ref, next_ref, body):
+    """
+    Determine if two tables are continuations based on the body sequence.
+    Look for page_header, page_footer, or picture elements between the two tables.
+    """
+    between_refs = get_refs_between(current_ref, next_ref, body)
+    for ref in between_refs:
+        element = find_element_by_ref(ref, body)
+        if element and element['label'] not in ('page_header', 'page_footer', 'picture'):
+            return False  # Non-continuation element found
+    return True  # Only continuation elements found
+
+
+def get_refs_between(current_ref, next_ref, body):
+    """ Extract references between two tables in the body sequence. """
+    refs = [item['$ref'] for item in body]
+    if current_ref in refs and next_ref in refs:
+        start = refs.index(current_ref)
+        end = refs.index(next_ref)
+        return refs[start + 1:end]  # Get refs between the two tables
+    return []
+
+
+def find_element_by_ref(ref, body):
+    """ Find the element in the document with the given self_ref. """
+    for element in body:
+        if element.get('self_ref') == ref:
+            return element
+    return None
 
 
 def extract_header(cells):
@@ -74,20 +79,19 @@ def extract_header(cells):
     return [cell['text'].strip() for cell in cells if cell['start_row_offset_idx'] == 0]
 
 
-def is_wrong_header(current_header, reference_header):
-    """
-    Detect if the current header is incorrect by comparing it with the reference header.
-    Continuation tables might have no header or fewer columns.
-    """
-    if not current_header or not reference_header:
-        return False  # No header indicates a likely continuation
-    if len(current_header) < len(reference_header):
-        return True  # Likely a wrong header
-    return current_header != reference_header
+def create_new_table(table, cells):
+    """ Create a new table structure for merging. """
+    return {
+        "data": {
+            "table_cells": cells
+        },
+        "prov": table['prov'],
+        "self_ref": table['self_ref']
+    }
 
 
-# Example usage with fragmented tables simulating multi-page tables
-fragmented_tables = [
+# Example usage
+tables = [
     {
         "data": {
             "table_cells": [
@@ -97,7 +101,8 @@ fragmented_tables = [
                 {"start_row_offset_idx": 1, "start_col_offset_idx": 1, "text": "1234"}
             ]
         },
-        "prov": {"page_no": 1}
+        "prov": {"page_no": 1},
+        "self_ref": "#/tables/0"
     },
     {
         "data": {
@@ -106,11 +111,20 @@ fragmented_tables = [
                 {"start_row_offset_idx": 0, "start_col_offset_idx": 1, "text": "5678"}
             ]
         },
-        "prov": {"page_no": 2}
-    },
-    {
-        "data": {
-            "table_cells": [
-                {"start_row_offset_idx": 0, "start_col_offset_idx": 0, "text": "Product", "column_header": True},
-                {"start_row_offset_idx": 0, "start_col_offset_idx": 1, "text": "Price", "column_header": True},
-     
+        "prov": {"page_no": 2},
+        "self_ref": "#/tables/1"
+    }
+]
+body = [
+    {"$ref": "#/tables/0"},
+    {"$ref": "#/text/45", "label": "page_footer"},
+    {"$ref": "#/text/46", "label": "page_header"},
+    {"$ref": "#/picture/5", "label": "picture"},
+    {"$ref": "#/tables/1"}
+]
+
+# Merge tables using the body sequence logic
+merged_tables = merge_pdf_tables(tables, body)
+
+import json
+print(json.dumps(merged_tables, indent=2))
