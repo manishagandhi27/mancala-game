@@ -1,7 +1,7 @@
 def merge_pdf_tables(tables, body):
     """
-    Merge multi-page tables for PDFs by analyzing the body sequence to determine if two tables are continuations.
-    Avoid merging tables on the same page and merge only if the body sequence indicates a continuation.
+    Merge multi-page tables for PDFs by analyzing the body sequence to determine continuation.
+    Avoid merging unrelated tables when non-continuation elements exist between them.
     """
     merged_tables = []
     current_table = None
@@ -23,7 +23,7 @@ def merge_pdf_tables(tables, body):
             last_row_offset = max(cell['end_row_offset_idx'] for cell in cells) + 1
         else:
             next_table_ref = tables[i]['self_ref'] if i < len(tables) - 1 else None
-            if next_table_ref and is_continuation(table_ref, next_table_ref, body):
+            if next_table_ref and is_continuation_with_body_check(table_ref, next_table_ref, body):
                 # Continuation table logic
                 for cell in cells:
                     cell['start_row_offset_idx'] += last_row_offset
@@ -43,10 +43,11 @@ def merge_pdf_tables(tables, body):
     return merged_tables
 
 
-def is_continuation(current_ref, next_ref, body):
+def is_continuation_with_body_check(current_ref, next_ref, body):
     """
     Determine if two tables are continuations based on the body sequence.
     Look for page_header, page_footer, or picture elements between the two tables.
+    If any non-header/footer text exists, they are separate tables.
     """
     between_refs = get_refs_between(current_ref, next_ref, body)
     for ref in between_refs:
@@ -113,6 +114,18 @@ tables = [
         },
         "prov": {"page_no": 2},
         "self_ref": "#/tables/1"
+    },
+    {
+        "data": {
+            "table_cells": [
+                {"start_row_offset_idx": 0, "start_col_offset_idx": 0, "text": "Product", "column_header": True},
+                {"start_row_offset_idx": 0, "start_col_offset_idx": 1, "text": "Price", "column_header": True},
+                {"start_row_offset_idx": 1, "start_col_offset_idx": 0, "text": "Laptop"},
+                {"start_row_offset_idx": 1, "start_col_offset_idx": 1, "text": "$1000"}
+            ]
+        },
+        "prov": {"page_no": 3},
+        "self_ref": "#/tables/2"
     }
 ]
 body = [
@@ -120,7 +133,9 @@ body = [
     {"$ref": "#/text/45", "label": "page_footer"},
     {"$ref": "#/text/46", "label": "page_header"},
     {"$ref": "#/picture/5", "label": "picture"},
-    {"$ref": "#/tables/1"}
+    {"$ref": "#/tables/1"},
+    {"$ref": "#/text/47", "label": "text"},
+    {"$ref": "#/tables/2"}
 ]
 
 # Merge tables using the body sequence logic
