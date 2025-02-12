@@ -1,9 +1,96 @@
+def merge_tables_with_proper_grouping(tables):
+    """ Merge only continuation tables, preserving unrelated tables as separate tables. """
+    merged_tables = []
+    current_table = {
+        "data": {
+            "table_cells": []
+        }
+    }
+    reference_header = None
+    last_row_offset = 0
+    inside_continuation = False
+
+    for table in tables:
+        cells = table['data']['table_cells']
+        
+        # Detect if the table has a column header
+        has_column_header = any(cell.get('column_header', False) for cell in cells)
+        current_header = extract_header(cells)
+
+        if reference_header is None:
+            # First table, set as reference
+            reference_header = current_header if has_column_header else None
+            current_table['data']['table_cells'].extend(cells)
+            last_row_offset = max(cell['end_row_offset_idx'] for cell in cells) + 1
+            inside_continuation = not has_column_header
+        elif not has_column_header and headers_are_similar(reference_header, current_header):
+            # Continuation of the current table
+            for cell in cells:
+                cell['start_row_offset_idx'] += last_row_offset
+                cell['end_row_offset_idx'] += last_row_offset
+                current_table['data']['table_cells'].append(cell)
+            last_row_offset = max(cell['end_row_offset_idx'] for cell in cells) + 1
+        else:
+            # New table starts here
+            merged_tables.append(current_table)
+            current_table = {
+                "data": {
+                    "table_cells": cells
+                }
+            }
+            reference_header = current_header if has_column_header else None
+            last_row_offset = max(cell['end_row_offset_idx'] for cell in cells) + 1
+            inside_continuation = not has_column_header
+
+    # Add the final merged table
+    merged_tables.append(current_table)
+    return merged_tables
+
+
 def extract_header(cells):
-    """ Extract the first row of a table as the header. """
+    """ Extract the first row as the header for comparison. """
     return [cell['text'].strip() for cell in cells if cell['start_row_offset_idx'] == 0]
 
 
 def headers_are_similar(header1, header2):
-    """ Compare two headers to determine if they are similar. """
+    """ Compare two headers and determine if they are similar. """
     return header1 == header2 or set(header1).issubset(set(header2))
 
+
+# Example usage with multiple fragmented tables
+fragmented_tables = [
+    {
+        "data": {
+            "table_cells": [
+                {"start_row_offset_idx": 0, "start_col_offset_idx": 0, "text": "Customer", "column_header": True},
+                {"start_row_offset_idx": 0, "start_col_offset_idx": 1, "text": "Order ID", "column_header": True},
+                {"start_row_offset_idx": 1, "start_col_offset_idx": 0, "text": "John Doe"},
+                {"start_row_offset_idx": 1, "start_col_offset_idx": 1, "text": "1234"}
+            ]
+        }
+    },
+    {
+        "data": {
+            "table_cells": [
+                {"start_row_offset_idx": 0, "start_col_offset_idx": 0, "text": "John Doe"},  # Misidentified as header
+                {"start_row_offset_idx": 0, "start_col_offset_idx": 1, "text": "5678"}
+            ]
+        }
+    },
+    {
+        "data": {
+            "table_cells": [
+                {"start_row_offset_idx": 0, "start_col_offset_idx": 0, "text": "Product", "column_header": True},
+                {"start_row_offset_idx": 0, "start_col_offset_idx": 1, "text": "Price", "column_header": True},
+                {"start_row_offset_idx": 1, "start_col_offset_idx": 0, "text": "Laptop"},
+                {"start_row_offset_idx": 1, "start_col_offset_idx": 1, "text": "$1000"}
+            ]
+        }
+    }
+]
+
+# Merge the tables with proper grouping
+merged_tables = merge_tables_with_proper_grouping(fragmented_tables)
+
+import json
+print(json.dumps(merged_tables, indent=2))
