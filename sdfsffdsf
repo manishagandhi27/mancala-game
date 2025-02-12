@@ -1,111 +1,206 @@
-def merge_pdf_tables(tables, body):
+def merge_multipage_tables(doc):
     """
-    Merge multi-page tables for PDFs by analyzing the body sequence to determine continuation.
-    Avoid merging unrelated tables when non-continuation elements exist between them.
+    Given a document dict (with keys: "body", "texts", "tables", "pictures"),
+    merge multipage tables according to the following rules:
+      1. Do not merge tables on the same page.
+      2. If two tables are on consecutive pages (e.g. page N and N+1) and
+         every element between their references in the "body" is either a
+         page header, page footer, or a picture, merge them.
+      3. The sequence of elements is taken from the "body" list.
     """
-    merged_tables = []
-    current_table = None
-    last_row_offset = 0
-    reference_header = None
+    # Build lookup dictionaries for texts, tables, and pictures.
+    texts_lookup = { text["self_ref"]: text for text in doc.get("texts", []) }
+    tables_lookup = { table["self_ref"]: table for table in doc.get("tables", []) }
+    pictures_lookup = {}
+    if "pictures" in doc:
+        pictures_lookup = { pic["self_ref"]: pic for pic in doc.get("pictures", []) }
+    
+    # Extract the ordered list of $ref values from the "body".
+    body_elements = doc.get("body", [])
+    body_refs = [el["$ref"] for el in body_elements]
 
-    for i, table in enumerate(tables):
-        cells = table['data']['table_cells']
-        current_page = table['prov']['page_no']
-        table_ref = table['self_ref']
-        current_column_count = max(cell['start_col_offset_idx'] for cell in cells) + 1
-        has_column_header = any(cell.get('column_header', False) for cell in cells)
-        current_header = extract_header(cells) if has_column_header else None
+    # Get the positions (index in body) of all table references.
+    table_positions = []
+    for idx, ref in enumerate(body_refs):
+        if ref.startswith("#/tables/"):
+            table_positions.append((idx, ref))
+    
+    merged_table_groups = []  # List of groups (each group is a list of table dicts)
+    i = 0
+    while i < len(table_positions):
+        start_index, table_ref = table_positions[i]
+        current_table = tables_lookup.get(table_ref)
+        # Start a new group with the current table.
+        current_group = [current_table]
+        current_page_no = current_table["prov"]["page_no"]
+        pos = start_index  # current position in body
 
-        if current_table is None:
-            # First table, initialize merging context
-            current_table = create_new_table(table, cells)
-            reference_header = current_header
-            last_row_offset = max(cell['end_row_offset_idx'] for cell in cells) + 1
-        else:
-            next_table_ref = tables[i]['self_ref'] if i < len(tables) - 1 else None
-            if next_table_ref and is_continuation_with_strict_check(table_ref, next_table_ref, body):
-                # Continuation table logic
-                for cell in cells:
-                    cell['start_row_offset_idx'] += last_row_offset
-                    cell['end_row_offset_idx'] += last_row_offset
-                    current_table['data']['table_cells'].append(cell)
-                last_row_offset = max(cell['end_row_offset_idx'] for cell in cells) + 1
+        # Look ahead for next table refs that could be part of this multipage table.
+        j = i + 1
+        while j < len(table_positions):
+            next_index, next_table_ref = table_positions[j]
+            next_table = tables_lookup.get(next_table_ref)
+            next_page_no = next_table["prov"]["page_no"]
+
+            # Rule 1: do not merge if both tables are on the same page.
+            if next_page_no == current_page_no:
+                break
+
+            # Check for consecutive pages.
+            if next_page_no == current_page_no + 1:
+                # Check the elements between the current table and the next table.
+                allowed = True
+                for k in range(pos + 1, next_index):
+                    in_between_ref = body_refs[k]
+                    if in_between_ref.startswith("#/texts/"):
+                        # Look up text element and check its label.
+                        text_obj = texts_lookup.get(in_between_ref, {})
+                        # Only allowed if the label is page_header or page_footer.
+                        if text_obj.get("label") not in ["page_header", "page_footer"]:
+                            allowed = False
+                            break
+                    elif in_between_ref.startswith("#/tables/"):
+                        # Should not occur (we already picked out tables) but if it does, not allowed.
+                        allowed = False
+                        break
+                    elif in_between_ref.startswith("#/picture/"):
+                        # Pictures are allowed.
+                        continue
+                    else:
+                        # If unknown type, we disallow merging.
+                        allowed = False
+                        break
+
+                if allowed:
+                    # Merge this table: add to the current group.
+                    current_group.append(next_table)
+                    # Update the "pos" and "current_page_no" for further merging.
+                    pos = next_index
+                    current_page_no = next_page_no
+                    j += 1  # move to check further tables
+                else:
+                    # There is intervening content that prevents merging.
+                    break
             else:
-                # New table detected, save the current one and start a new one
-                merged_tables.append(current_table)
-                current_table = create_new_table(table, cells)
-                reference_header = current_header
-                last_row_offset = max(cell['end_row_offset_idx'] for cell in cells) + 1
+                # Page numbers are not consecutive.
+                break
+        merged_table_groups.append(current_group)
+        i = j  # Continue from the next unchecked table reference
 
-    # Add the last merged table
-    if current_table:
-        merged_tables.append(current_table)
-    return merged_tables
+    # Now, create a new list of tables: if a group contains multiple tables, merge them;
+    # otherwise, include the table as is.
+    new_tables = []
+    for group in merged_table_groups:
+        if len(group) == 1:
+            new_tables.append(group[0])
+        else:
+            merged_table = merge_tables_in_group(group)
+            new_tables.append(merged_table)
+    
+    # Optionally, update the document's tables with the merged ones.
+    doc["tables"] = new_tables
+    return doc
 
 
-def is_continuation_with_strict_check(current_ref, next_ref, body):
+def merge_tables_in_group(group):
     """
-    Determine if two tables are continuations based on the body sequence.
-    Strictly ensure no non-continuation elements exist between the two tables.
+    Merge a list of table dictionaries (from multipage tables) into one table.
+    In this example, we simply concatenate their "table_cells" lists.
+    (Additional logic could be added to remove duplicate headers, etc.)
     """
-    between_refs = get_refs_between(current_ref, next_ref, body)
-    for ref in between_refs:
-        element = find_element_by_ref(ref, body)
-        if element and element['label'] not in ('page_header', 'page_footer', 'picture'):
-            return False  # Non-continuation element found
-    return True  # Only continuation elements found
-
-
-def get_refs_between(current_ref, next_ref, body):
-    """ Extract references between two tables in the body sequence. """
-    refs = [item['$ref'] for item in body]
-    if current_ref in refs and next_ref in refs:
-        start = refs.index(current_ref)
-        end = refs.index(next_ref)
-        return refs[start + 1:end]  # Get refs between the two tables
-    return []
-
-
-def find_element_by_ref(ref, body):
-    """ Find the element in the document with the given self_ref. """
-    for element in body:
-        if element.get('self_ref') == ref:
-            return element
-    return None
-
-
-def extract_header(cells):
-    """ Extract the first row as a header for comparison. """
-    return [cell['text'].strip() for cell in cells if cell['start_row_offset_idx'] == 0]
-
-
-def create_new_table(table, cells):
-    """ Create a new table structure for merging. """
-    return {
+    merged_cells = []
+    for table in group:
+        cells = table.get("data", {}).get("table_cells", [])
+        merged_cells.extend(cells)
+    
+    # Create a merged table dictionary.
+    merged_table = {
         "data": {
-            "table_cells": cells
+            "table_cells": merged_cells
         },
-        "prov": table['prov'],
-        "self_ref": table['self_ref']
+        # For provenance, we take the first table's page info.
+        "prov": group[0]["prov"],
+        # Create a new self_ref for the merged table.
+        "self_ref": group[0]["self_ref"] + "_merged"
+    }
+    return merged_table
+
+
+# ===== Example Usage =====
+if __name__ == "__main__":
+    # Sample JSON document (using the provided example)
+    doc = {
+        "body": [
+            {"$ref": "#/tables/0"},
+            {"$ref": "#/texts/45"},
+            {"$ref": "#/texts/46"},
+            {"$ref": "#/picture/5"},
+            {"$ref": "#/tables/1"},
+            {"$ref": "#/texts/47"},
+            {"$ref": "#/tables/2"}
+        ],
+        "texts": [
+            {
+                "self_ref": "#/texts/45",
+                "parent": {"$ref": "#/body"},
+                "children": [],
+                "label": "page_header",
+                "prov": [{
+                    "page_no": 1,
+                    "bbox": {"l": 18.34, "t": 627.0, "r": 36.34, "b": 237.0, "coord_origin": "BOTTOMLEFT"},
+                    "charspan": [0, 39]
+                }],
+                "orig": "arXiv:2408.09869v5  [cs.CL]  9 Dec 2024",
+                "text": "arXiv:2408.09869v5  [cs.CL]  9 Dec 2024"
+            },
+            # You could add more texts here (e.g., texts/46 and texts/47) if needed.
+        ],
+        "tables": [
+            {
+                "data": {
+                    "table_cells": [
+                        {"start_row_offset_idx": 0, "start_col_offset_idx": 0, "text": "Customer", "column_header": True},
+                        {"start_row_offset_idx": 0, "start_col_offset_idx": 1, "text": "Order ID", "column_header": True},
+                        {"start_row_offset_idx": 1, "start_col_offset_idx": 0, "text": "John Doe"},
+                        {"start_row_offset_idx": 1, "start_col_offset_idx": 1, "text": "1234"}
+                    ]
+                },
+                "prov": {"page_no": 1},
+                "self_ref": "#/tables/0"
+            },
+            {
+                "data": {
+                    "table_cells": [
+                        {"start_row_offset_idx": 0, "start_col_offset_idx": 0, "text": "Jane Smith"},
+                        {"start_row_offset_idx": 0, "start_col_offset_idx": 1, "text": "5678"}
+                    ]
+                },
+                "prov": {"page_no": 2},
+                "self_ref": "#/tables/1"
+            },
+            {
+                "data": {
+                    "table_cells": [
+                        {"start_row_offset_idx": 0, "start_col_offset_idx": 0, "text": "Product", "column_header": True},
+                        {"start_row_offset_idx": 0, "start_col_offset_idx": 1, "text": "Price", "column_header": True},
+                        {"start_row_offset_idx": 1, "start_col_offset_idx": 0, "text": "Laptop"},
+                        {"start_row_offset_idx": 1, "start_col_offset_idx": 1, "text": "$1000"}
+                    ]
+                },
+                "prov": {"page_no": 3},
+                "self_ref": "#/tables/2"
+            }
+        ],
+        # Optionally include a "pictures" list if needed.
+        "pictures": [
+            {
+                "self_ref": "#/picture/5",
+                "label": "picture",
+                # other picture properties...
+            }
+        ]
     }
 
-
-# Example usage
-tables = [
-    {
-        "data": {
-            "table_cells": [
-                {"start_row_offset_idx": 0, "start_col_offset_idx": 0, "text": "Customer", "column_header": True},
-                {"start_row_offset_idx": 0, "start_col_offset_idx": 1, "text": "Order ID", "column_header": True},
-                {"start_row_offset_idx": 1, "start_col_offset_idx": 0, "text": "John Doe"},
-                {"start_row_offset_idx": 1, "start_col_offset_idx": 1, "text": "1234"}
-            ]
-        },
-        "prov": {"page_no": 1},
-        "self_ref": "#/tables/0"
-    },
-    {
-        "data": {
-            "table_cells": [
-                {"start_row_offset_idx": 0, "start_col_offset_idx": 0, "text": "Jane Smith"},
-                {"start_row_of
+    merged_doc = merge_multipage_tables(doc)
+    import json
+    print(json.dumps(merged_doc, indent=2))
