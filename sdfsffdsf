@@ -23,7 +23,7 @@ def merge_pdf_tables(tables, body):
             last_row_offset = max(cell['end_row_offset_idx'] for cell in cells) + 1
         else:
             next_table_ref = tables[i]['self_ref'] if i < len(tables) - 1 else None
-            if next_table_ref and is_continuation_with_body_check(table_ref, next_table_ref, body):
+            if next_table_ref and is_continuation_with_strict_check(table_ref, next_table_ref, body):
                 # Continuation table logic
                 for cell in cells:
                     cell['start_row_offset_idx'] += last_row_offset
@@ -43,11 +43,10 @@ def merge_pdf_tables(tables, body):
     return merged_tables
 
 
-def is_continuation_with_body_check(current_ref, next_ref, body):
+def is_continuation_with_strict_check(current_ref, next_ref, body):
     """
     Determine if two tables are continuations based on the body sequence.
-    Look for page_header, page_footer, or picture elements between the two tables.
-    If any non-header/footer text exists, they are separate tables.
+    Strictly ensure no non-continuation elements exist between the two tables.
     """
     between_refs = get_refs_between(current_ref, next_ref, body)
     for ref in between_refs:
@@ -109,37 +108,4 @@ tables = [
         "data": {
             "table_cells": [
                 {"start_row_offset_idx": 0, "start_col_offset_idx": 0, "text": "Jane Smith"},
-                {"start_row_offset_idx": 0, "start_col_offset_idx": 1, "text": "5678"}
-            ]
-        },
-        "prov": {"page_no": 2},
-        "self_ref": "#/tables/1"
-    },
-    {
-        "data": {
-            "table_cells": [
-                {"start_row_offset_idx": 0, "start_col_offset_idx": 0, "text": "Product", "column_header": True},
-                {"start_row_offset_idx": 0, "start_col_offset_idx": 1, "text": "Price", "column_header": True},
-                {"start_row_offset_idx": 1, "start_col_offset_idx": 0, "text": "Laptop"},
-                {"start_row_offset_idx": 1, "start_col_offset_idx": 1, "text": "$1000"}
-            ]
-        },
-        "prov": {"page_no": 3},
-        "self_ref": "#/tables/2"
-    }
-]
-body = [
-    {"$ref": "#/tables/0"},
-    {"$ref": "#/text/45", "label": "page_footer"},
-    {"$ref": "#/text/46", "label": "page_header"},
-    {"$ref": "#/picture/5", "label": "picture"},
-    {"$ref": "#/tables/1"},
-    {"$ref": "#/text/47", "label": "text"},
-    {"$ref": "#/tables/2"}
-]
-
-# Merge tables using the body sequence logic
-merged_tables = merge_pdf_tables(tables, body)
-
-import json
-print(json.dumps(merged_tables, indent=2))
+                {"start_row_of
