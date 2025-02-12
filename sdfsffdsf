@@ -1,41 +1,66 @@
-def merge_tables_with_structure_validation(tables):
-    """ Merge tables only if they have consistent column count and structure, preserving unrelated tables. """
+def merge_multi_page_tables(tables, page_info):
+    """
+    Merge multi-page tables while avoiding merging unrelated tables.
+    Tables on consecutive pages with similar structure are treated as continuations.
+    """
     merged_tables = []
     current_table = {
         "data": {
             "table_cells": []
-        }
+        },
+        "start_page": page_info[0],
+        "end_page": page_info[0]
     }
-    last_column_count = None
+    reference_header = None
     last_row_offset = 0
 
-    for table in tables:
+    for table, page in zip(tables, page_info):
         cells = table['data']['table_cells']
-        
-        # Calculate current table column count
         current_column_count = max(cell['start_col_offset_idx'] for cell in cells) + 1
+        has_column_header = any(cell.get('column_header', False) for cell in cells)
+        current_header = extract_header(cells) if has_column_header else None
 
-        if last_column_count is None:
-            # First table, initialize the merging context
-            last_column_count = current_column_count
+        if reference_header is None:
+            # Initialize with the first table's header and structure
+            reference_header = current_header
             current_table['data']['table_cells'].extend(cells)
             last_row_offset = max(cell['end_row_offset_idx'] for cell in cells) + 1
-        elif current_column_count == last_column_count:
-            # Likely a continuation of the previous table
-            for cell in cells:
-                cell['start_row_offset_idx'] += last_row_offset
-                cell['end_row_offset_idx'] += last_row_offset
-                current_table['data']['table_cells'].append(cell)
-            last_row_offset = max(cell['end_row_offset_idx'] for cell in cells) + 1
+            current_table['end_page'] = page
+        elif page == current_table['end_page'] + 1:
+            # Check if it's a continuation of the current table
+            if is_footer(cells):
+                continue  # Skip footer rows
+            elif headers_are_similar(reference_header, current_header) or not has_column_header:
+                # Merge as continuation (either header is similar or no header detected)
+                for cell in cells:
+                    cell['start_row_offset_idx'] += last_row_offset
+                    cell['end_row_offset_idx'] += last_row_offset
+                    current_table['data']['table_cells'].append(cell)
+                last_row_offset = max(cell['end_row_offset_idx'] for cell in cells) + 1
+                current_table['end_page'] = page
+            else:
+                # Different structure or header—start a new table
+                merged_tables.append(current_table)
+                current_table = {
+                    "data": {
+                        "table_cells": cells
+                    },
+                    "start_page": page,
+                    "end_page": page
+                }
+                reference_header = current_header
+                last_row_offset = max(cell['end_row_offset_idx'] for cell in cells) + 1
         else:
-            # Column count mismatch, treat it as a new table
+            # Non-consecutive page or different structure—start a new table
             merged_tables.append(current_table)
             current_table = {
                 "data": {
                     "table_cells": cells
-                }
+                },
+                "start_page": page,
+                "end_page": page
             }
-            last_column_count = current_column_count
+            reference_header = current_header
             last_row_offset = max(cell['end_row_offset_idx'] for cell in cells) + 1
 
     # Add the last merged table
@@ -43,42 +68,61 @@ def merge_tables_with_structure_validation(tables):
     return merged_tables
 
 
-# Example usage with multiple tables of varying structures
+def extract_header(cells):
+    """ Extract the first row as a header for comparison. """
+    return [cell['text'].strip() for cell in cells if cell['start_row_offset_idx'] == 0]
+
+
+def headers_are_similar(header1, header2):
+    """ Compare two headers to determine if they are similar. """
+    if not header1 or not header2:
+        return False
+    return header1 == header2 or set(header1).issubset(set(header2))
+
+
+def is_footer(cells):
+    """ Detect if a row is a footer based on common patterns. Customize this function for your specific footer patterns. """
+    footer_patterns = ["Page", "Total", "Continued"]  # Add more patterns as needed
+    return any(any(pattern.lower() in cell['text'].lower() for pattern in footer_patterns) for cell in cells)
+
+
+# Example usage with tables spanning multiple pages
 fragmented_tables = [
     {
         "data": {
             "table_cells": [
-                {"start_row_offset_idx": 0, "start_col_offset_idx": 0, "text": "Value A"},
-                {"start_row_offset_idx": 0, "start_col_offset_idx": 1, "text": "Value B"}
+                {"start_row_offset_idx": 0, "start_col_offset_idx": 0, "text": "Customer", "column_header": True},
+                {"start_row_offset_idx": 0, "start_col_offset_idx": 1, "text": "Order ID", "column_header": True},
+                {"start_row_offset_idx": 1, "start_col_offset_idx": 0, "text": "John Doe"},
+                {"start_row_offset_idx": 1, "start_col_offset_idx": 1, "text": "1234"}
             ]
         }
     },
     {
         "data": {
             "table_cells": [
-                {"start_row_offset_idx": 0, "start_col_offset_idx": 0, "text": "Header 1"},
-                {"start_row_offset_idx": 0, "start_col_offset_idx": 1, "text": "Header 2"},
-                {"start_row_offset_idx": 0, "start_col_offset_idx": 2, "text": "Header 3"},
-                {"start_row_offset_idx": 0, "start_col_offset_idx": 3, "text": "Header 4"},
-                {"start_row_offset_idx": 0, "start_col_offset_idx": 4, "text": "Header 5"},
-                {"start_row_offset_idx": 1, "start_col_offset_idx": 0, "text": "Row 1"}
+                {"start_row_offset_idx": 0, "start_col_offset_idx": 0, "text": "Jane Smith"},  # Continuation
+                {"start_row_offset_idx": 0, "start_col_offset_idx": 1, "text": "5678"}
             ]
         }
     },
     {
         "data": {
             "table_cells": [
-                {"start_row_offset_idx": 0, "start_col_offset_idx": 0, "text": "Data 1"},
-                {"start_row_offset_idx": 0, "start_col_offset_idx": 1, "text": "Data 2"},
-                {"start_row_offset_idx": 0, "start_col_offset_idx": 2, "text": "Data 3"},
-                {"start_row_offset_idx": 0, "start_col_offset_idx": 3, "text": "Data 4"}
+                {"start_row_offset_idx": 0, "start_col_offset_idx": 0, "text": "Product", "column_header": True},
+                {"start_row_offset_idx": 0, "start_col_offset_idx": 1, "text": "Price", "column_header": True},
+                {"start_row_offset_idx": 1, "start_col_offset_idx": 0, "text": "Laptop"},
+                {"start_row_offset_idx": 1, "start_col_offset_idx": 1, "text": "$1000"}
             ]
         }
     }
 ]
 
-# Merge tables with structure validation
-merged_tables = merge_tables_with_structure_validation(fragmented_tables)
+# Simulated page info for each table
+page_info = [1, 2, 3]
+
+# Merge multi-page tables
+merged_tables = merge_multi_page_tables(fragmented_tables, page_info)
 
 import json
 print(json.dumps(merged_tables, indent=2))
