@@ -1,7 +1,6 @@
-def merge_word_tables(tables):
+def merge_tables_without_page_numbers(tables):
     """
-    Merge tables in Word documents based on structural continuity and avoid false merges.
-    Since no page numbers are available, rely on headers and column count.
+    Merge multi-page tables without using page numbers by relying on structural and content-based heuristics.
     """
     merged_tables = []
     current_table = {
@@ -61,7 +60,9 @@ def is_continuation(current_header, reference_header):
     """
     if current_header is None:
         return True  # No header indicates a likely continuation
-    return headers_are_similar(current_header, reference_header)
+    if reference_header and headers_are_similar(current_header, reference_header):
+        return True
+    return False
 
 
 def headers_are_similar(header1, header2):
@@ -71,7 +72,7 @@ def headers_are_similar(header1, header2):
     return header1 == header2 or set(header1).issubset(set(header2))
 
 
-# Example usage with tables from Word documents
+# Example usage with tables simulating multi-page tables without page numbers
 fragmented_tables = [
     {
         "data": {
@@ -103,8 +104,8 @@ fragmented_tables = [
     }
 ]
 
-# Merge tables based on structural continuity
-merged_tables = merge_word_tables(fragmented_tables)
+# Merge tables using structural continuity
+merged_tables = merge_tables_without_page_numbers(fragmented_tables)
 
 import json
 print(json.dumps(merged_tables, indent=2))
