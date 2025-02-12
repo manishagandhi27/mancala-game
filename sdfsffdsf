@@ -1,25 +1,9 @@
-# Extract current "header"
-        current_header = extract_header(cells)
+def extract_header(cells):
+    """ Extract the first row of a table as the header. """
+    return [cell['text'].strip() for cell in cells if cell['start_row_offset_idx'] == 0]
 
-        if reference_header is None:
-            # First table, use its header as the reference
-            reference_header = current_header
-            merged_table['data']['table_cells'].extend(cells)
-            last_row_offset = max(cell['end_row_offset_idx'] for cell in cells) + 1
-        else:
-            # Check if the current "header" is actually a data row (wrongly identified)
-            if not headers_are_similar(reference_header, current_header):
-                print(f"Fixing header: Treating {current_header} as data row.")
-                # Reinsert reference header and continue merging
-                for cell in cells:
-                    cell['start_row_offset_idx'] += last_row_offset
-                    cell['end_row_offset_idx'] += last_row_offset
-                    merged_table['data']['table_cells'].append(cell)
-                last_row_offset = max(cell['end_row_offset_idx'] for cell in cells) + 1
-            else:
-                # Continuation with correct header (merge as usual)
-                for cell in cells:
-                    cell['start_row_offset_idx'] += last_row_offset
-                    cell['end_row_offset_idx'] += last_row_offset
-                    merged_table['data']['table_cells'].append(cell)
-                last_row_offset = max(cell['end_row_offset_idx'] for cell in cells) + 1
+
+def headers_are_similar(header1, header2):
+    """ Compare two headers to determine if they are similar. """
+    return header1 == header2 or set(header1).issubset(set(header2))
+
