@@ -1,45 +1,98 @@
-def flatten_document(doc):
+def flatten_document_with_context(doc):
     """
-    Replace all $refs in the 'body' with the actual content from texts, tables, and pictures.
-    Returns a list of content strings in the reading order.
+    Flatten the document by replacing $refs with actual content.
+    For text elements we include the 'text' and 'label'.
+    For tables we convert the table_cells into a human-readable Markdown table.
+    For pictures we use the caption (or a placeholder).
+    
+    Then, we look at the sequence and if a table is immediately preceded by one or
+    more text items that are not page headers or footers, we merge that text as additional
+    context into the table.
     """
-    # Build lookup dictionaries
-    texts_lookup = { t["self_ref"]: t for t in doc.get("texts", []) }
-    tables_lookup = { t["self_ref"]: t for t in doc.get("tables", []) }
-    pictures_lookup = { p["self_ref"]: p for p in doc.get("pictures", []) } if "pictures" in doc else {}
+    # Build lookup dictionaries for texts, tables, and pictures.
+    texts_lookup = {}
+    for text in doc.get("texts", []):
+        texts_lookup[text["self_ref"]] = text
+    for text in doc.get("text", []):
+        texts_lookup[text["self_ref"]] = text
 
-    flat_content = []
+    tables_lookup = {table["self_ref"]: table for table in doc.get("tables", [])}
+    pictures_lookup = {}
+    if "pictures" in doc:
+        pictures_lookup = {pic["self_ref"]: pic for pic in doc.get("pictures", [])}
 
+    # Build a flat list of items (preserving the order from the body).
+    flat_items = []
     for el in doc.get("body", []):
         ref = el["$ref"]
         if ref.startswith("#/texts/") or ref.startswith("#/text/"):
+            # Get the text element (using both keys if needed)
             text_obj = texts_lookup.get(ref) or texts_lookup.get(ref.replace("#/text/", "#/texts/"))
             if text_obj:
-                flat_content.append(text_obj.get("text", ""))
+                flat_items.append({
+                    "type": "text",
+                    "content": text_obj.get("text", ""),
+                    "label": text_obj.get("label", ""),
+                    "ref": text_obj.get("self_ref")
+                })
         elif ref.startswith("#/tables/"):
             table_obj = tables_lookup.get(ref)
             if table_obj:
-                # Convert table cells to a simple markdown table (or any other human-readable format)
                 md_table = convert_table_to_markdown(table_obj["data"]["table_cells"])
-                flat_content.append(md_table)
+                flat_items.append({
+                    "type": "table",
+                    "content": md_table,
+                    "ref": table_obj.get("self_ref")
+                })
         elif ref.startswith("#/picture/"):
             pic_obj = pictures_lookup.get(ref)
             if pic_obj:
-                # Use caption or alt text if available, otherwise a placeholder.
-                caption = pic_obj.get("caption", f"[Image {pic_obj['self_ref']}]")
-                flat_content.append(caption)
+                caption = pic_obj.get("caption", f"[Image: {pic_obj['self_ref']}]")
+                flat_items.append({
+                    "type": "picture",
+                    "content": caption,
+                    "ref": pic_obj.get("self_ref")
+                })
         else:
-            # If the element type is unknown, you might simply ignore or add a placeholder.
-            flat_content.append(f"[Unknown element: {ref}]")
-    return flat_content
+            # Unknown element types can be skipped or added as a placeholder.
+            flat_items.append({
+                "type": "unknown",
+                "content": f"[Unknown element: {ref}]",
+                "ref": ref
+            })
+
+    # Now post-process the flat list: if a table is immediately preceded by text items
+    # that are not headers or footers, merge those text items as additional context.
+    processed_items = []
+    i = 0
+    while i < len(flat_items):
+        item = flat_items[i]
+        if item["type"] == "table":
+            # Look back at the previous items in the processed list to see if they are text and qualify.
+            summary_texts = []
+            while processed_items and processed_items[-1]["type"] == "text" and \
+                  processed_items[-1].get("label") not in ["page_header", "page_footer"]:
+                # Pop the text from the processed list and store it as context.
+                summary_item = processed_items.pop()
+                summary_texts.insert(0, summary_item["content"])
+            if summary_texts:
+                # Prepend the summary text to the table's content.
+                combined = "\n".join(summary_texts) + "\n\n" + item["content"]
+                item["content"] = combined
+            processed_items.append(item)
+        else:
+            processed_items.append(item)
+        i += 1
+
+    return processed_items
+
 
 def convert_table_to_markdown(table_cells):
     """
-    Given a list of table cell dictionaries, convert them into a Markdown table.
-    Assumes that cells have row and column indices. (You might need to customize this.)
+    Convert a list of table cell dictionaries into a Markdown table.
+    Assumes cells contain row and column indices (start_row_offset_idx, start_col_offset_idx)
+    and that the first row may be headers.
     """
-    # For simplicity, assume a two-row header + data rows layout.
-    # Build a dictionary with (row, col) -> text.
     table_dict = {}
     max_row = 0
     max_col = 0
@@ -49,26 +102,25 @@ def convert_table_to_markdown(table_cells):
         table_dict[(row, col)] = cell.get("text", "")
         max_row = max(max_row, row)
         max_col = max(max_col, col)
-    
-    # Create rows of text.
+
     rows = []
-    for r in range(max_row+1):
-        row_cells = [ table_dict.get((r, c), "") for c in range(max_col+1) ]
+    for r in range(max_row + 1):
+        row_cells = [table_dict.get((r, c), "") for c in range(max_col + 1)]
         rows.append("| " + " | ".join(row_cells) + " |")
-    
-    # Create a header separator if first row is header
+
+    # If the first row is assumed to be a header, add a separator.
     if rows:
-        header_sep = "| " + " | ".join(["---"] * (max_col+1)) + " |"
+        header_sep = "| " + " | ".join(["---"] * (max_col + 1)) + " |"
         rows.insert(1, header_sep)
     return "\n".join(rows)
 
-def chunk_text(flat_content, max_tokens=300, overlap=50):
+
+def chunk_text(flat_items, max_tokens=300, overlap=50):
     """
-    Given a list of content strings (flattened), create chunks that maintain context.
-    Here we simply join elements until we hit a token limit.
-    (You can also use a proper tokenizer to count tokens.)
+    Given a list of flat items (each with a 'content' field),
+    join them into chunks that preserve context.
+    This function uses a simple whitespace split to approximate token counts.
     """
-    # For simplicity, we'll use whitespace-split words as a token approximation.
     chunks = []
     current_chunk = ""
     current_tokens = 0
@@ -76,29 +128,86 @@ def chunk_text(flat_content, max_tokens=300, overlap=50):
     def count_tokens(text):
         return len(text.split())
 
-    for content in flat_content:
+    for item in flat_items:
+        content = item["content"]
         tokens = count_tokens(content)
-        # If adding this content exceeds max_tokens, create a new chunk with overlap.
+        # If adding this item would exceed our token limit, then create a new chunk.
         if current_tokens + tokens > max_tokens:
             chunks.append(current_chunk.strip())
-            # Use overlap from the end of the current chunk.
+            # For overlap, grab the last few words.
             current_chunk_words = current_chunk.split()
-            overlap_words = " ".join(current_chunk_words[-overlap:]) if overlap < len(current_chunk_words) else current_chunk
-            current_chunk = overlap_words + " " + content
+            overlap_text = " ".join(current_chunk_words[-overlap:]) if overlap < len(current_chunk_words) else current_chunk
+            current_chunk = overlap_text + "\n" + content
             current_tokens = count_tokens(current_chunk)
         else:
             current_chunk += "\n" + content
             current_tokens += tokens
+
     if current_chunk.strip():
         chunks.append(current_chunk.strip())
     return chunks
 
+
 # ===== Example Usage =====
 if __name__ == "__main__":
-    # Assume `doc` is your JSON after merging tables.
-    flat_content = flatten_document(doc)
-    chunks = chunk_text(flat_content, max_tokens=300, overlap=50)
+    # Example JSON document (after table merging, for instance).
+    # Note: This sample includes text elements (some of which are headers),
+    # a table element, and a picture element.
+    doc = {
+        "body": [
+            {"$ref": "#/texts/10"},      # A summary text (non-header/footer)
+            {"$ref": "#/tables/0"},      # A table (its content will be augmented by the summary text above)
+            {"$ref": "#/texts/11"},      # A text that might follow the table (if needed, you could add similar logic for after)
+            {"$ref": "#/picture/5"},
+            {"$ref": "#/texts/45"}       # A header text (will not be merged as context)
+        ],
+        "texts": [
+            {
+                "self_ref": "#/texts/10",
+                "label": "body_text",
+                "text": "This table summarizes the quarterly sales figures."
+            },
+            {
+                "self_ref": "#/texts/11",
+                "label": "body_text",
+                "text": "The table above shows a detailed breakdown by region."
+            },
+            {
+                "self_ref": "#/texts/45",
+                "label": "page_header",
+                "text": "Company Quarterly Report"
+            }
+        ],
+        "tables": [
+            {
+                "self_ref": "#/tables/0",
+                "data": {
+                    "table_cells": [
+                        {"start_row_offset_idx": 0, "start_col_offset_idx": 0, "text": "Region", "column_header": True},
+                        {"start_row_offset_idx": 0, "start_col_offset_idx": 1, "text": "Sales", "column_header": True},
+                        {"start_row_offset_idx": 1, "start_col_offset_idx": 0, "text": "North"},
+                        {"start_row_offset_idx": 1, "start_col_offset_idx": 1, "text": "$1000"},
+                        {"start_row_offset_idx": 2, "start_col_offset_idx": 0, "text": "South"},
+                        {"start_row_offset_idx": 2, "start_col_offset_idx": 1, "text": "$1500"}
+                    ]
+                },
+                "prov": {"page_no": 2}
+            }
+        ],
+        "pictures": [
+            {
+                "self_ref": "#/picture/5",
+                "caption": "A chart showing growth trends."
+            }
+        ]
+    }
+
+    # Flatten and add table context from adjacent summary text.
+    flat_items = flatten_document_with_context(doc)
+    # Now, create chunks with sufficient context.
+    chunks = chunk_text(flat_items, max_tokens=300, overlap=50)
+
     for idx, chunk in enumerate(chunks):
-        print(f"--- Chunk {idx+1} ---")
+        print(f"--- Chunk {idx + 1} ---")
         print(chunk)
         print("\n")
