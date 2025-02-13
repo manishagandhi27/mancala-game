@@ -1,216 +1,104 @@
-def merge_multipage_tables(doc):
+def flatten_document(doc):
     """
-    Merge multipage tables from a document according to these rules:
-      1. Do not merge tables on the same page.
-      2. Merge tables on consecutive pages if every element (by body order)
-         between their occurrences is either a page header, page footer, or a picture.
+    Replace all $refs in the 'body' with the actual content from texts, tables, and pictures.
+    Returns a list of content strings in the reading order.
     """
-    # Build lookup dictionaries.
-    texts_lookup = {}
-    # Some docs might have keys as "texts" or "text"; merge both if needed.
-    for text in doc.get("texts", []):
-        texts_lookup[text["self_ref"]] = text
-    for text in doc.get("text", []):
-        texts_lookup[text["self_ref"]] = text
+    # Build lookup dictionaries
+    texts_lookup = { t["self_ref"]: t for t in doc.get("texts", []) }
+    tables_lookup = { t["self_ref"]: t for t in doc.get("tables", []) }
+    pictures_lookup = { p["self_ref"]: p for p in doc.get("pictures", []) } if "pictures" in doc else {}
 
-    tables_lookup = {table["self_ref"]: table for table in doc.get("tables", [])}
-    pictures_lookup = {pic["self_ref"]: pic for pic in doc.get("pictures", [])} if "pictures" in doc else {}
+    flat_content = []
 
-    # Get the ordered list of $ref values from the "body" array.
-    body_elements = doc.get("body", [])
-    body_refs = [el["$ref"] for el in body_elements]
-
-    # Record positions of table references in the body.
-    table_positions = []
-    for idx, ref in enumerate(body_refs):
-        if ref.startswith("#/tables/"):
-            table_positions.append((idx, ref))
-
-    merged_table_groups = []  # Each group is a list of table dicts to merge.
-    i = 0
-    while i < len(table_positions):
-        start_index, table_ref = table_positions[i]
-        current_table = tables_lookup.get(table_ref)
-        if not current_table:
-            i += 1
-            continue
-
-        # Start a new group with the current table.
-        current_group = [current_table]
-        # Use the page number from the most recently merged table.
-        current_page_no = current_table["prov"]["page_no"]
-        # 'pos' marks the last table's position in the body order.
-        pos = start_index
-
-        # Look ahead to see if subsequent table(s) can be merged.
-        j = i + 1
-        while j < len(table_positions):
-            next_index, next_table_ref = table_positions[j]
-            next_table = tables_lookup.get(next_table_ref)
-            if not next_table:
-                j += 1
-                continue
-
-            next_page_no = next_table["prov"]["page_no"]
-
-            # Rule 1: Do not merge if the next table is on the same page.
-            if next_page_no == current_page_no:
-                break
-
-            # Only consider consecutive pages.
-            if next_page_no == current_page_no + 1:
-                allowed = True
-                # Check every element in the body between the last merged table and this next table.
-                for k in range(pos + 1, next_index):
-                    in_between_ref = body_refs[k]
-
-                    # Check for text elements (allow only if header/footer)
-                    if in_between_ref.startswith("#/texts/") or in_between_ref.startswith("#/text/"):
-                        # Try both keys
-                        text_obj = texts_lookup.get(in_between_ref)
-                        if not text_obj:
-                            alt_key = in_between_ref.replace("#/text/", "#/texts/")
-                            text_obj = texts_lookup.get(alt_key)
-                        # If not found or label is not allowed, disallow merging.
-                        if not text_obj or text_obj.get("label") not in ["page_header", "page_footer"]:
-                            allowed = False
-                            break
-
-                    # Pictures are allowed.
-                    elif in_between_ref.startswith("#/picture/"):
-                        if in_between_ref not in pictures_lookup:
-                            allowed = False
-                            break
-                        continue
-
-                    # Any other element is not allowed.
-                    else:
-                        allowed = False
-                        break
-
-                if allowed:
-                    # If all intervening elements are allowed, merge this table.
-                    current_group.append(next_table)
-                    pos = next_index
-                    current_page_no = next_page_no
-                    j += 1  # Move to the next candidate.
-                else:
-                    # Disallowed intervening element found; stop merging.
-                    break
-            else:
-                # Pages are not consecutive.
-                break
-
-        merged_table_groups.append(current_group)
-        i = j  # Continue from the next unchecked table.
-
-    # Build new list of tables: if a group has multiple tables, merge them.
-    new_tables = []
-    for group in merged_table_groups:
-        if len(group) == 1:
-            new_tables.append(group[0])
+    for el in doc.get("body", []):
+        ref = el["$ref"]
+        if ref.startswith("#/texts/") or ref.startswith("#/text/"):
+            text_obj = texts_lookup.get(ref) or texts_lookup.get(ref.replace("#/text/", "#/texts/"))
+            if text_obj:
+                flat_content.append(text_obj.get("text", ""))
+        elif ref.startswith("#/tables/"):
+            table_obj = tables_lookup.get(ref)
+            if table_obj:
+                # Convert table cells to a simple markdown table (or any other human-readable format)
+                md_table = convert_table_to_markdown(table_obj["data"]["table_cells"])
+                flat_content.append(md_table)
+        elif ref.startswith("#/picture/"):
+            pic_obj = pictures_lookup.get(ref)
+            if pic_obj:
+                # Use caption or alt text if available, otherwise a placeholder.
+                caption = pic_obj.get("caption", f"[Image {pic_obj['self_ref']}]")
+                flat_content.append(caption)
         else:
-            merged_table = merge_tables_in_group(group)
-            new_tables.append(merged_table)
+            # If the element type is unknown, you might simply ignore or add a placeholder.
+            flat_content.append(f"[Unknown element: {ref}]")
+    return flat_content
 
-    # Update document.
-    doc["tables"] = new_tables
-    return doc
-
-
-def merge_tables_in_group(group):
+def convert_table_to_markdown(table_cells):
     """
-    Merge a list of table dictionaries by concatenating their table_cells.
-    (You can add additional logic to remove duplicate headers, etc.)
+    Given a list of table cell dictionaries, convert them into a Markdown table.
+    Assumes that cells have row and column indices. (You might need to customize this.)
     """
-    merged_cells = []
-    for table in group:
-        cells = table.get("data", {}).get("table_cells", [])
-        merged_cells.extend(cells)
+    # For simplicity, assume a two-row header + data rows layout.
+    # Build a dictionary with (row, col) -> text.
+    table_dict = {}
+    max_row = 0
+    max_col = 0
+    for cell in table_cells:
+        row = cell.get("start_row_offset_idx", 0)
+        col = cell.get("start_col_offset_idx", 0)
+        table_dict[(row, col)] = cell.get("text", "")
+        max_row = max(max_row, row)
+        max_col = max(max_col, col)
+    
+    # Create rows of text.
+    rows = []
+    for r in range(max_row+1):
+        row_cells = [ table_dict.get((r, c), "") for c in range(max_col+1) ]
+        rows.append("| " + " | ".join(row_cells) + " |")
+    
+    # Create a header separator if first row is header
+    if rows:
+        header_sep = "| " + " | ".join(["---"] * (max_col+1)) + " |"
+        rows.insert(1, header_sep)
+    return "\n".join(rows)
 
-    merged_table = {
-        "data": {"table_cells": merged_cells},
-        # Retain provenance from the first table in the group.
-        "prov": group[0]["prov"],
-        # Generate a new self_ref to denote a merged table.
-        "self_ref": group[0]["self_ref"] + "_merged"
-    }
-    return merged_table
+def chunk_text(flat_content, max_tokens=300, overlap=50):
+    """
+    Given a list of content strings (flattened), create chunks that maintain context.
+    Here we simply join elements until we hit a token limit.
+    (You can also use a proper tokenizer to count tokens.)
+    """
+    # For simplicity, we'll use whitespace-split words as a token approximation.
+    chunks = []
+    current_chunk = ""
+    current_tokens = 0
 
+    def count_tokens(text):
+        return len(text.split())
+
+    for content in flat_content:
+        tokens = count_tokens(content)
+        # If adding this content exceeds max_tokens, create a new chunk with overlap.
+        if current_tokens + tokens > max_tokens:
+            chunks.append(current_chunk.strip())
+            # Use overlap from the end of the current chunk.
+            current_chunk_words = current_chunk.split()
+            overlap_words = " ".join(current_chunk_words[-overlap:]) if overlap < len(current_chunk_words) else current_chunk
+            current_chunk = overlap_words + " " + content
+            current_tokens = count_tokens(current_chunk)
+        else:
+            current_chunk += "\n" + content
+            current_tokens += tokens
+    if current_chunk.strip():
+        chunks.append(current_chunk.strip())
+    return chunks
 
 # ===== Example Usage =====
 if __name__ == "__main__":
-    # Simulated scenario:
-    # - Page 1: table 1.
-    # - Page 2: table 2, followed by disallowed (non-header/footer) text, then table 3.
-    #
-    # According to the rules:
-    #   * Table 1 (page 1) and table 2 (page 2) can merge (if allowed by intervening elements).
-    #   * Table 3 is on the same page as table 2 (page 2) and should not be merged with them.
-    doc = {
-        "body": [
-            {"$ref": "#/tables/0"},  # table 1 (page 1)
-            {"$ref": "#/tables/1"},  # table 2 (page 2)
-            {"$ref": "#/texts/99"},  # intervening text (not header/footer)
-            {"$ref": "#/tables/2"}   # table 3 (page 2)
-        ],
-        "texts": [
-            {
-                "self_ref": "#/texts/99",
-                "parent": {"$ref": "#/body"},
-                "children": [],
-                "label": "body_text",  # Not allowed for merging
-                "prov": [{"page_no": 2}],
-                "orig": "Some paragraph text",
-                "text": "This is a normal paragraph."
-            }
-        ],
-        "tables": [
-            {
-                "data": {
-                    "table_cells": [
-                        {"start_row_offset_idx": 0, "start_col_offset_idx": 0, "text": "Customer", "column_header": True},
-                        {"start_row_offset_idx": 0, "start_col_offset_idx": 1, "text": "Order ID", "column_header": True},
-                        {"start_row_offset_idx": 1, "start_col_offset_idx": 0, "text": "John Doe"},
-                        {"start_row_offset_idx": 1, "start_col_offset_idx": 1, "text": "1234"}
-                    ]
-                },
-                "prov": {"page_no": 1},
-                "self_ref": "#/tables/0"
-            },
-            {
-                "data": {
-                    "table_cells": [
-                        {"start_row_offset_idx": 0, "start_col_offset_idx": 0, "text": "Jane Smith"},
-                        {"start_row_offset_idx": 0, "start_col_offset_idx": 1, "text": "5678"}
-                    ]
-                },
-                "prov": {"page_no": 2},
-                "self_ref": "#/tables/1"
-            },
-            {
-                "data": {
-                    "table_cells": [
-                        {"start_row_offset_idx": 0, "start_col_offset_idx": 0, "text": "Product", "column_header": True},
-                        {"start_row_offset_idx": 0, "start_col_offset_idx": 1, "text": "Price", "column_header": True},
-                        {"start_row_offset_idx": 1, "start_col_offset_idx": 0, "text": "Laptop"},
-                        {"start_row_offset_idx": 1, "start_col_offset_idx": 1, "text": "$1000"}
-                    ]
-                },
-                # Note: This table now has page_no 2 (same as table 2)
-                "prov": {"page_no": 2},
-                "self_ref": "#/tables/2"
-            }
-        ],
-        "pictures": [
-            {
-                "self_ref": "#/picture/5",
-                "label": "picture",
-                # additional picture properties...
-            }
-        ]
-    }
-
-    merged_doc = merge_multipage_tables(doc)
-    import json
-    print(json.dumps(merged_doc, indent=2))
+    # Assume `doc` is your JSON after merging tables.
+    flat_content = flatten_document(doc)
+    chunks = chunk_text(flat_content, max_tokens=300, overlap=50)
+    for idx, chunk in enumerate(chunks):
+        print(f"--- Chunk {idx+1} ---")
+        print(chunk)
+        print("\n")
